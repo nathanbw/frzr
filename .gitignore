@@ -1,3 +1,7 @@
 target/
 **/*.rs.bk
 .idea/
+# Avoid checking in the db file if you're playing
+# with the tool in the repo :^p
+frzr.db
+
