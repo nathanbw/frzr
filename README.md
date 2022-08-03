@@ -16,8 +16,10 @@ md5sum -c ~/MD5SUMS.md5 |grep -v -e 'OK$'
 
 This pattern is useful for files that you want to keep "on ice"; whose contents you do not expect to change. When the
 files _do_ intentionally change, though, you have to look at each file and make sure the changes were intentional and
-then generate the MD5SUMS.md5 file again. Additionally, you may say to yourself "Hey, this MD5SUMS.md5 file is
-basically" a database. It sure would be nice to get some stats out of it.". This is where frzr comes in.
+then generate the MD5SUMS.md5 file again. `frzr` aims to make this process easier.
+
+Additionally, you may say to yourself "Hey, this MD5SUMS.md5 file is basically a database. It sure would be nice to get
+some stats out of it". `frzr` aims to help with that, too.
 
 The aim of frzr is to make the database of checksums of your important files easy to create, manage, and use.
 Eventually, I want frzr to be able to:
