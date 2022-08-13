@@ -44,4 +44,8 @@ frzr report --dupes
   * "learning" directory created, to house small programs that help me understand pieces of `frzr`
 
 ## Why `frzr` instead of ...?
+I'm currently aware of a few other efforts in the file integrity space:
+* fim
+* ???
+* legdur
 Why not? :^)
