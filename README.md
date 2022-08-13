@@ -42,3 +42,6 @@ frzr report --dupes
   * Simply running `frzr` does what `frzr check` should do in the future!
   * README updated and made spiffier
   * "learning" directory created, to house small programs that help me understand pieces of `frzr`
+
+## Why `frzr` instead of ...?
+Why not? :^)
