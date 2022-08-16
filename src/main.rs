@@ -5,22 +5,17 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};
-use sha2::digest::generic_array;
 
 use sqlite::Connection;
 use sqlite::State;
-use sqlite::Value;
 
-use generic_array::GenericArray;
-
-use std::fmt::UpperHex;
 use std::os::unix::ffi::OsStrExt;
 
 // TODO: How to not crash when stdout is closed?
 fn main() {
     // TODO: return the schema version as well as the connection
     // TODO: Maybe return Option or Result from open_and_initialize_db?
-    let mut db = open_and_initialize_db();
+    let db = open_and_initialize_db();
     // If we haven't crashed yet, then the db is open and ready for business
     // Now, let's iterate over all the files
     let path_buf: PathBuf = PathBuf::from("src");
@@ -31,47 +26,51 @@ fn main() {
     let mut current_run_id = 0;
     for filename in file_iter {
         let file_hash = compute_the_hash(filename).unwrap();
-        { // TODO: Verify that this scope is needed, and if so, find out why
-            if is_this_the_first_file {
-                is_this_the_first_file = false;
-                { // TODO: Verify that this scope is needed, and if so, find out why
-                    db.execute("INSERT INTO run (start_time) VALUES (CURRENT_TIMESTAMP);").unwrap();
-                    let mut statement = db
-                        .prepare("SELECT id FROM run ORDER BY id DESC LIMIT 1;")
-                        .unwrap();
-                    while State::Row == statement.next().unwrap() {
-                        current_run_id = statement.read::<i64>(0).unwrap();
-                    }
+        if is_this_the_first_file {
+            is_this_the_first_file = false;
+            {
+                // TODO: Verify that this scope is needed, and if so, find out why
+                db.execute("INSERT INTO run (start_time) VALUES (CURRENT_TIMESTAMP);")
+                    .unwrap();
+                let mut statement = db
+                    .prepare("SELECT id FROM run ORDER BY id DESC LIMIT 1;")
+                    .unwrap();
+                while State::Row == statement.next().unwrap() {
+                    current_run_id = statement.read::<i64>(0).unwrap();
                 }
             }
-
-            let mut statement = db
-                .prepare("\
-                    INSERT INTO file_entry (run_id, file_name, file_hash) VALUES (?, ?, ?);\
-                ").unwrap();
-
-            statement.bind(1, current_run_id).unwrap();
-            // TODO: I want to store the PathBuf in sqlite as raw binary data
-            //       1. Is this doing that?
-            //       2. Why is it so hard?
-            let why_is_this_copy_needed = PathBuf::from(filename);
-            let why_is_this_temporary_variable_needed = why_is_this_copy_needed.into_os_string();
-            let filename_str = why_is_this_temporary_variable_needed.as_bytes();
-            statement.bind(2, filename_str).unwrap();
-            // TODO: This feels like a useless roundtrip -- this already was raw bytes, no?
-            statement.bind(3, file_hash.as_bytes()).unwrap();
-            statement.next().unwrap();
         }
+
+        let mut statement = db
+            .prepare(
+                "\
+                    INSERT INTO file_entry (run_id, file_name, file_hash) VALUES (?, ?, ?);\
+                ",
+            )
+            .unwrap();
+
+        statement.bind(1, current_run_id).unwrap();
+        // TODO: I want to store the PathBuf in sqlite as raw binary data
+        //       1. Is this doing that?
+        //       2. Why is it so hard?
+        let why_is_this_copy_needed = PathBuf::from(filename);
+        let why_is_this_temporary_variable_needed = why_is_this_copy_needed.into_os_string();
+        let filename_str = why_is_this_temporary_variable_needed.as_bytes();
+        statement.bind(2, filename_str).unwrap();
+        // TODO: This feels like a useless roundtrip -- this already was raw bytes, no?
+        statement.bind(3, file_hash.as_bytes()).unwrap();
+        statement.next().unwrap();
         // If we haven't crashed yet, then the run exists in the DB, the file_entry rows exist in
         // the db, and the run can be marked finished
-        { // TODO: Verify that this scope is needed, and if so, find out why
-            let mut statement = db
-                .prepare("\
-                    UPDATE run set end_time = CURRENT_TIMESTAMP WHERE id = ?;\
-                ").unwrap();
-            statement.bind(1, current_run_id).unwrap();
-            statement.next().unwrap();
-        }
+        let mut statement = db
+            .prepare(
+                "\
+                UPDATE run set end_time = CURRENT_TIMESTAMP WHERE id = ?;\
+            ",
+            )
+            .unwrap();
+        statement.bind(1, current_run_id).unwrap();
+        statement.next().unwrap();
     }
 }
 
@@ -105,7 +104,7 @@ fn compute_the_hash(file: &PathBuf) -> Result<String, Error> {
         hasher.update(&buf[..num_bytes_read]);
     }
 
-    let result : String = format!("{:x}", hasher.finalize());
+    let result: String = format!("{:x}", hasher.finalize());
     Ok(result)
 }
 
@@ -177,7 +176,7 @@ fn open_and_initialize_db() -> Connection {
         .unwrap();
 
     let mut latest_version_in_db = 0;
-    {
+    { // TODO Why is this scope necessary?
         let mut statement = connection
             .prepare("SELECT * FROM schema_version ORDER BY version DESC LIMIT 1;")
             .unwrap();
@@ -222,10 +221,12 @@ fn open_and_initialize_db() -> Connection {
             ",
             )
             .unwrap();
-        connection
-            .execute("INSERT INTO schema_version (version) VALUES (1);")
-            .unwrap();
         latest_version_in_db = 1;
+        let mut statement = connection
+            .prepare("INSERT INTO schema_version (version) VALUES (?);")
+            .unwrap();
+        statement.bind(1, latest_version_in_db).unwrap();
+        statement.next().unwrap();
     }
     connection
 }
