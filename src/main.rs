@@ -28,16 +28,13 @@ fn main() {
         let file_hash = compute_the_hash(filename).unwrap();
         if is_this_the_first_file {
             is_this_the_first_file = false;
-            {
-                // TODO: Verify that this scope is needed, and if so, find out why
-                db.execute("INSERT INTO run (start_time) VALUES (CURRENT_TIMESTAMP);")
-                    .unwrap();
-                let mut statement = db
-                    .prepare("SELECT id FROM run ORDER BY id DESC LIMIT 1;")
-                    .unwrap();
-                while State::Row == statement.next().unwrap() {
-                    current_run_id = statement.read::<i64>(0).unwrap();
-                }
+            db.execute("INSERT INTO run (start_time) VALUES (CURRENT_TIMESTAMP);")
+                .unwrap();
+            let mut statement = db
+                .prepare("SELECT id FROM run ORDER BY id DESC LIMIT 1;")
+                .unwrap();
+            while State::Row == statement.next().unwrap() {
+                current_run_id = statement.read::<i64>(0).unwrap();
             }
         }
 
@@ -176,7 +173,8 @@ fn open_and_initialize_db() -> Connection {
         .unwrap();
 
     let mut latest_version_in_db = 0;
-    { // TODO Why is this scope necessary?
+    {
+        // TODO Why is this scope necessary?
         let mut statement = connection
             .prepare("SELECT * FROM schema_version ORDER BY version DESC LIMIT 1;")
             .unwrap();
