@@ -2,6 +2,7 @@ use std::fs;
 use std::fs::DirEntry;
 use std::io;
 use std::io::Read;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::exit;
 
@@ -11,11 +12,56 @@ use sqlite::Connection;
 use sqlite::State;
 
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::OsStringExt;
 
-// #[derive(Debug)]
-// enum frzrError {
-//     Io(io::Error),
-// }
+use std::ffi::OsString;
+
+use clap::{arg, Command};
+
+fn cli() -> Command<'static> {
+    Command::new("frzr")
+        .about("A bitrot detector")
+        .subcommand_required(true)
+        .arg_required_else_help(true)
+        .allow_external_subcommands(true)
+        .subcommand(
+            //TODO maybe add `--start-over` argument to `init` for blowing away .frzr and starting
+            //     fresh?
+            Command::new("init").about("Initialize the frzr db for the current directory"),
+        )
+        .subcommand(
+            // TODO dump could probably take a run id and dump its checksums while defaulting to
+            //      the latest
+            Command::new("dump").about("Dump the latest run's checksums in `shasum` format"),
+        )
+        .subcommand(
+            // TODO status could take a run id, too?
+            // TODO will status ever show info about a currently-running `frzr` process?
+            // TODO should this be `stats` instead of `status`?
+            Command::new("status").about("Show the status of the latest run"),
+        )
+        .subcommand(
+            // TODO Will check also print out if there are differences in what is in the DB vs what
+            //      is on the disk?
+            // TODO Maybe the default behavior will be to walk starting at CWD, but you can pass
+            //      --full to do a full scan regardless of CWD
+            Command::new("check")
+                .about("Walk the filesystem, starting at CWD, compute and store checksums"),
+        )
+    //TODO Remove below commented-out stanza -- leaving for learning:
+    // .subcommand(
+    //     Command::new("stash")
+    //         .args_conflicts_with_subcommands(true)
+    //         .args(push_args())
+    //         .subcommand(Command::new("push").args(push_args()))
+    //         .subcommand(Command::new("pop").arg(arg!([STASH])))
+    //         .subcommand(Command::new("apply").arg(arg!([STASH]))),
+    // )
+}
+
+fn push_args() -> Vec<clap::Arg<'static>> {
+    vec![arg!(-m --message <MESSAGE>).required(false)]
+}
 
 // TODO: How to not crash when stdout is closed?  Answer: There are
 //      two paths: register our own handler for SIGPIPE, or just
@@ -23,9 +69,53 @@ use std::os::unix::ffi::OsStrExt;
 //
 //      I think the best path forward is just to use the write macros
 //      and handle the standard broken pipe error
-
 fn main() {
-    // FUTURE: Maybe return the schema version as well as the connection?
+    let matches = cli().get_matches();
+
+    match matches.subcommand() {
+        Some(("init", _)) => {
+            // TODO: do we need to match `sub_matches`; here `_`?
+            init();
+        }
+        Some(("dump", _)) => {
+            dump();
+        }
+        Some(("check", _)) => {
+            check();
+        }
+        Some(("stash", sub_matches)) => {
+            let stash_command = sub_matches.subcommand().unwrap_or(("push", sub_matches));
+            match stash_command {
+                ("apply", sub_matches) => {
+                    let stash = sub_matches.get_one::<String>("STASH");
+                    println!("Applying {:?}", stash);
+                }
+                ("pop", sub_matches) => {
+                    let stash = sub_matches.get_one::<String>("STASH");
+                    println!("Popping {:?}", stash);
+                }
+                ("push", sub_matches) => {
+                    let message = sub_matches.get_one::<String>("message");
+                    println!("Pushing {:?}", message);
+                }
+                (name, _) => {
+                    unreachable!("Unsupported subcommand `{}`", name)
+                }
+            }
+        }
+        Some((ext, sub_matches)) => {
+            let args = sub_matches
+                .get_many::<OsString>("")
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            println!("Calling out to {:?} with {:?}", ext, args);
+        }
+        _ => unreachable!(), // If all subcommands are defined above, anything else is unreachabe!()
+    }
+}
+
+fn dump() {
     let db = match open_and_initialize_db() {
         Ok(db) => db,
         Err(e) => {
@@ -36,11 +126,97 @@ fn main() {
             exit(1);
         }
     };
-    // If we get here, then the db is open and ready for business
-    // Now, let's iterate over all the files
-    let path_buf: PathBuf = PathBuf::from("src");
+    let mut current_run_id = 0;
+    let mut statement = db
+        .prepare("SELECT id FROM run ORDER BY id DESC LIMIT 1;")
+        .unwrap();
+    while State::Row == statement.next().unwrap() {
+        current_run_id = statement.read::<i64>(0).unwrap();
+    }
+    if current_run_id == 0 {
+        // TODO Return early; no runs in the DB yet
+    }
+    let mut statement = db
+        .prepare("SELECT file_name, file_hash FROM file_entry WHERE run_id = ?;")
+        .unwrap();
+    statement.bind(1, current_run_id).unwrap();
+    while State::Row == statement.next().unwrap() {
+        let cur_file_name_vec = statement.read::<Vec<u8>>(0).unwrap();
+        let cur_file_name = OsString::from_vec(cur_file_name_vec);
 
-    let filenames = match give_me_the_files(path_buf) {
+        let cur_file_hash = statement.read::<String>(1).unwrap();
+        // TODO: print nasty filenames better
+        println!("{}  {:?}", cur_file_hash, cur_file_name);
+    }
+}
+
+fn init() {
+    // TODO: This is how I expect init to work:
+    //       1. Check if .frzr directory exists. If it does, bail with message
+    //       2. Create .frzr directory in the current directory
+    //       3. Initialize the DB there
+    let db_path = Path::new("./.frzr/");
+    let path_exists = match db_path.try_exists() {
+        Ok(exists) => exists,
+        Err(e) => {
+            // TODO Maybe print to stderr here:
+            println!("Error checking for existing .frzr directory; not taking any action!");
+            println!("Error was: {:?}", e);
+            exit(1);
+        }
+    };
+    if path_exists {
+        // TODO Maybe print to stderr here:
+        println!(".frzr directory already exists; not taking any action!");
+        exit(1);
+    };
+    match std::fs::create_dir(db_path) {
+        Ok(ok_val) => ok_val,
+        Err(e) => {
+            // TODO Maybe print to stderr here:
+            println!("Error creating .frzr directory! Error was: {:?}", e);
+            exit(1);
+        }
+    };
+    // FUTURE: Maybe return the schema version as well as the connection?
+    match open_and_initialize_db() {
+        Ok(db) => db,
+        Err(e) => {
+            println!(
+                "There was a problem opening or initializing the DB: {:?}",
+                e
+            );
+            exit(1);
+        }
+    };
+    // If we get here, then the db is open and ready for business
+}
+
+fn check() {
+    // TODO: Everywhere but `init` ought to probably use a different function to get the DB
+    //       Another possibility would be a param to `open_and_initialize_db` for whether to
+    //       create the DB vs just open and verify schema or something
+    let db = match open_and_initialize_db() {
+        Ok(db) => db,
+        Err(e) => {
+            println!(
+                "There was a problem opening or initializing the DB: {:?}",
+                e
+            );
+            exit(1);
+        }
+    };
+    // Now, let's iterate over all the files
+    let path_buf: PathBuf = PathBuf::from(".");
+
+    // TODO: We should have a .frzrignore, or maybe take as a CLI arg?
+    let mut ignore_paths: Vec<PathBuf> = Vec::new();
+    //TODO: Definitely should not ignore `.git` by default:
+    ignore_paths.push(PathBuf::from("./.git"));
+    //TODO: Definitely should not ignore `target` by default:
+    ignore_paths.push(PathBuf::from("./target"));
+    ignore_paths.push(PathBuf::from("./.frzr"));
+    let filenames = match give_me_the_files(path_buf, ignore_paths) {
         Ok(filenames) => filenames,
         Err(e) => {
             println!("There was a problem recursing the filesystem: {:?}", e);
@@ -83,8 +259,8 @@ fn main() {
         let mut statement = db
             .prepare(
                 "\
-                    INSERT INTO file_entry (run_id, file_name, file_hash) VALUES (?, ?, ?);\
-                ",
+                        INSERT INTO file_entry (run_id, file_name, file_hash) VALUES (?, ?, ?);\
+                    ",
             )
             .unwrap();
 
@@ -98,24 +274,24 @@ fn main() {
         statement.bind(2, filename_str).unwrap();
         statement.bind(3, file_hash.as_bytes()).unwrap();
         statement.next().unwrap();
-        // If we haven't crashed yet, then the run exists in the DB, the file_entry rows exist in
-        // the db, and the run can be marked finished
-        let mut statement = db
-            .prepare(
-                "\
-                UPDATE run set end_time = CURRENT_TIMESTAMP WHERE id = ?;\
-            ",
-            )
-            .unwrap();
-        statement.bind(1, current_run_id).unwrap();
-        statement.next().unwrap();
+        println!("filename: {:?}", filename);
     }
+    // If we haven't crashed yet, then the run exists in the DB, the file_entry rows exist in
+    // the db, and the run can be marked finished
+    let mut statement = db
+        .prepare(
+            "\
+                    UPDATE run set end_time = CURRENT_TIMESTAMP WHERE id = ?;\
+                ",
+        )
+        .unwrap();
+    statement.bind(1, current_run_id).unwrap();
+    statement.next().unwrap();
+    println!("Inserting the end_time timestamp");
+    println!("Reached the end of the check() function");
 }
 
 fn compute_the_hash(file: &PathBuf) -> Result<String, io::Error> {
-    // random.dat created with: dd if=/dev/random of=random.dat bs=1M count=4
-    // This program was tested during development with: cargo run && sha256sum random.dat
-    // and visually comparing the results
     let mut the_file = fs::File::open(file)?;
 
     let mut hasher = Sha256::new();
@@ -134,21 +310,31 @@ fn compute_the_hash(file: &PathBuf) -> Result<String, io::Error> {
     Ok(result)
 }
 
-fn give_me_the_files(path_string: PathBuf) -> Result<Vec<PathBuf>, io::Error> {
+fn give_me_the_files(
+    path_string: PathBuf,
+    ignore_paths: Vec<PathBuf>,
+) -> Result<Vec<PathBuf>, io::Error> {
     let mut all_the_files: Vec<PathBuf> = Vec::new();
     let visited_dirs: Vec<DirEntry> = Vec::new();
-    let result = dir_walk_recurser(path_string, visited_dirs, &mut all_the_files);
+    let result = dir_walk_recurser(path_string, visited_dirs, &mut all_the_files, &ignore_paths);
     match result {
         Ok(_) => Ok(all_the_files),
         Err(e) => Err(e),
     }
 }
 
+// TODO: is visited_dirs actually doing anything?
 fn dir_walk_recurser(
     path_string: PathBuf,
     mut visited_dirs: Vec<DirEntry>,
     out_files: &mut Vec<PathBuf>,
+    ignore_paths: &Vec<PathBuf>,
 ) -> Result<Vec<DirEntry>, io::Error> {
+    // Return early if you see the .frzr/ directory:
+    if ignore_paths.contains(&path_string) {
+        println!("Skipping ignored path: {:?}", path_string);
+        return Ok(visited_dirs);
+    }
     let dir_iter = match fs::read_dir(path_string) {
         Ok(rd) => rd,
         Err(e) => {
@@ -176,7 +362,8 @@ fn dir_walk_recurser(
         if file_type.is_dir() {
             // add this to the list and recurse
             visited_dirs.push(entry);
-            visited_dirs = match dir_walk_recurser(path_name, visited_dirs, out_files) {
+            visited_dirs = match dir_walk_recurser(path_name, visited_dirs, out_files, ignore_paths)
+            {
                 Ok(vd) => vd,
                 Err(e) => {
                     println!("An error occurred: {}", e);
@@ -192,7 +379,8 @@ fn dir_walk_recurser(
 }
 
 fn open_and_initialize_db() -> Result<Connection, sqlite::Error> {
-    let connection = sqlite::open("frzr.db")?;
+    // TODO: do I need the opening "./" on these path strings? (check everywhere, not just here)
+    let connection = sqlite::open("./.frzr/frzr.db")?;
     // If you need to test what happens when this function returns an error, uncomment this:
     // connection.execute("CREATE TABLE CREATE TABLE")?;
     connection.execute(
