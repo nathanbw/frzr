@@ -16,7 +16,9 @@ use std::os::unix::ffi::OsStringExt;
 
 use std::ffi::OsString;
 
-use clap::{arg, Command};
+// TODO: Example how to import `args` from clap so we can pass options to the "verbs" of frzr:
+// use clap::{arg, Command};
+use clap::{Command};
 
 fn cli() -> Command<'static> {
     Command::new("frzr")
@@ -59,9 +61,9 @@ fn cli() -> Command<'static> {
     // )
 }
 
-fn push_args() -> Vec<clap::Arg<'static>> {
-    vec![arg!(-m --message <MESSAGE>).required(false)]
-}
+// fn push_args() -> Vec<clap::Arg<'static>> {
+//     vec![arg!(-m --message <MESSAGE>).required(false)]
+// }
 
 // TODO: How to not crash when stdout is closed?  Answer: There are
 //      two paths: register our own handler for SIGPIPE, or just
@@ -143,10 +145,11 @@ fn dump() {
     while State::Row == statement.next().unwrap() {
         let cur_file_name_vec = statement.read::<Vec<u8>>(0).unwrap();
         let cur_file_name = OsString::from_vec(cur_file_name_vec);
+        let file_name_path = Path::new(&cur_file_name);
 
         let cur_file_hash = statement.read::<String>(1).unwrap();
         // TODO: print nasty filenames better
-        println!("{}  {:?}", cur_file_hash, cur_file_name);
+        println!("{}  {}", cur_file_hash, file_name_path.display());
     }
 }
 
@@ -241,9 +244,9 @@ fn check() {
                 Ok(_) => (), // TODO use the function/map that does this prettier
                 Err(e) => {
                     // TODO what should we do here? Maybe we should
-                    // have a scheme where we copy the DB, write to
-                    // the copy, and then move it back into place on
-                    // success only
+                    //      have a scheme where we copy the DB, write to
+                    //      the copy, and then move it back into place on
+                    //      success only
                     println!("There was a problem computing a hash: {:?}", e);
                     exit(1);
                 }
@@ -265,13 +268,10 @@ fn check() {
             .unwrap();
 
         statement.bind(1, current_run_id).unwrap();
-        // TODO: I want to store the PathBuf in sqlite as raw binary data
-        //       1. Is this doing that?
-        //       2. Why is it so hard?
-        let why_is_this_copy_needed = PathBuf::from(filename);
-        let why_is_this_temporary_variable_needed = why_is_this_copy_needed.into_os_string();
-        let filename_str = why_is_this_temporary_variable_needed.as_bytes();
-        statement.bind(2, filename_str).unwrap();
+        // TODO: Why does ? not work, and I have to use unwrap() instead? The error was:
+        //       Cannot use the `?` operator in a function that returns `()`
+        let filename_bytes = filename.as_os_str().as_bytes();
+        statement.bind(2, filename_bytes).unwrap();
         statement.bind(3, file_hash.as_bytes()).unwrap();
         statement.next().unwrap();
         println!("filename: {:?}", filename);
